@@ -261,7 +261,7 @@ class TestPromptLoader:
         cli_write_ralph_prompt(str(workspace))
         result = json.loads(capsys.readouterr().out)
 
-        prompt_path = workspace / ".claude" / "ralph-prompt.txt"
+        prompt_path = workspace / ".codex" / "loop-prompt.txt"
         state_path = workspace / ".sibyl" / "project" / "ralph_loop_state.json"
 
         assert prompt_path.exists()

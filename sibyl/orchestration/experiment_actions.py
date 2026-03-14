@@ -117,6 +117,8 @@ def build_experiment_skill_action(
     action_cls: type[Any],
 ) -> Any:
     """Single-agent experiment action (fallback when no task_plan)."""
+    if orchestrator.config.experiment_mode == "local":
+        raise RuntimeError("local experiment_mode requires task_plan.json-backed dispatch")
     skill = build_experiment_skill_dict(
         orchestrator,
         mode,
@@ -334,8 +336,29 @@ def build_experiment_batch_action(
     register_dispatched_tasks(
         orchestrator.ws.active_root,
         task_gpu_map,
-        _remote_project_dir(orchestrator),
+        (
+            str(orchestrator.ws.active_root)
+            if orchestrator.config.experiment_mode == "local"
+            else _remote_project_dir(orchestrator)
+        ),
     )
+
+    if orchestrator.config.experiment_mode == "local":
+        command = build_repo_python_cli_command(
+            "local-experiment-run",
+            orchestrator.workspace_path,
+            "--mode",
+            mode,
+            "--batch-json",
+            json.dumps(batch, ensure_ascii=False),
+        )
+        return action_cls(
+            action_type="bash",
+            bash_command=command,
+            description=desc,
+            stage=stage,
+            estimated_minutes=est_min,
+        )
 
     monitor = build_experiment_monitor(
         orchestrator,
@@ -421,6 +444,20 @@ def build_gpu_poll_action(
     action_cls: type[Any],
 ) -> Any:
     """Return a gpu_poll action for the main session to execute."""
+    if orchestrator.config.experiment_mode == "local":
+        interval_min = max(1, orchestrator.config.gpu_poll_interval_sec // 60)
+        return action_cls(
+            action_type="bash",
+            bash_command=build_repo_python_cli_command(
+                "local-gpu-poll",
+                orchestrator.workspace_path,
+            ),
+            description=(
+                f"轮询等待本地空闲 GPU（最多 {orchestrator.config.max_gpus} 张，"
+                f"每 {interval_min}min 本机检查一次）"
+            ),
+            stage=stage,
+        )
     from sibyl.gpu_scheduler import gpu_poll_wait_script, nvidia_smi_query_cmd
 
     aggressive = orchestrator.config.gpu_aggressive_mode

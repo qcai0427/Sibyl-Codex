@@ -5,13 +5,7 @@ import yaml
 
 @dataclass
 class AgentConfig:
-    """Reserved per-phase model config kept for backward compatibility.
-
-    The current Claude Code runtime routes models through `.claude/agents`
-    plus `model_tiers` / `agent_tier_map`. These nested blocks are parsed and
-    persisted so older configs continue to load cleanly, but they are not the
-    primary runtime control surface.
-    """
+    """Reserved per-phase model config kept for backward compatibility."""
     model: str = "claude-opus-4-6"
     max_tokens: int = 64000
     temperature: float = 0.7
@@ -21,7 +15,7 @@ class AgentConfig:
 class Config:
     workspaces_dir: Path = Path("workspaces")
     # Reserved compatibility blocks; current runtime model routing is controlled
-    # by `.claude/agents` and model_tiers/agent_tier_map instead.
+    # by repo prompts plus model_tiers / agent_tier_map.
     ideation: AgentConfig = field(default_factory=lambda: AgentConfig(temperature=0.9))
     planning: AgentConfig = field(default_factory=AgentConfig)
     experiment: AgentConfig = field(default_factory=lambda: AgentConfig(temperature=0.3))
@@ -76,7 +70,7 @@ class Config:
     codex_writing_model: str = ""  # Codex writing model (empty = use default)
 
     # Experiment execution
-    experiment_mode: str = "ssh_mcp"  # "ssh_mcp" | "server_codex" | "server_claude"
+    experiment_mode: str = "ssh_mcp"  # "ssh_mcp" | "server_codex" | "server_claude" | "local"
     server_codex_path: str = "codex"  # Codex CLI path on server
     server_claude_path: str = "claude"  # Claude CLI path on server
 
@@ -201,7 +195,7 @@ class Config:
                 f"Invalid writing_mode '{cfg.writing_mode}', "
                 f"must be one of {valid_writing_modes}"
             )
-        valid_experiment_modes = {"ssh_mcp", "server_codex", "server_claude"}
+        valid_experiment_modes = {"ssh_mcp", "server_codex", "server_claude", "local"}
         if cfg.experiment_mode not in valid_experiment_modes:
             raise ValueError(
                 f"Invalid experiment_mode '{cfg.experiment_mode}', "
@@ -293,7 +287,7 @@ class Config:
                 f"Invalid writing_mode '{cfg.writing_mode}', "
                 f"must be one of {valid_writing_modes}"
             )
-        valid_experiment_modes = {"ssh_mcp", "server_codex", "server_claude"}
+        valid_experiment_modes = {"ssh_mcp", "server_codex", "server_claude", "local"}
         if cfg.experiment_mode not in valid_experiment_modes:
             raise ValueError(
                 f"Invalid experiment_mode '{cfg.experiment_mode}', "

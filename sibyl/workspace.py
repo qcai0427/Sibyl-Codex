@@ -8,7 +8,7 @@ import dataclasses
 from dataclasses import dataclass, asdict, field
 
 from sibyl.runtime_assets import (
-    GENERATED_CLAUDE_HEADER,
+    GENERATED_AGENTS_HEADER,
     WORKSPACE_PROJECT_MEMORY,
     WORKSPACE_PROJECT_PROMPT_OVERLAYS,
     WORKSPACE_SYSTEM_META,
@@ -94,8 +94,8 @@ class Workspace:
         <project_name>/
         ├── status.json
         ├── config.yaml              # project-level config overrides
-        ├── CLAUDE.md               # generated effective system+project instructions
-        ├── .claude/                # runtime links to system-managed Claude assets
+        ├── AGENTS.md               # generated effective system+project instructions
+        ├── .codex/                 # Codex runtime metadata / compiled prompts
         ├── .sibyl/project/         # project-private memory + overlays
         ├── environment/
         │   └── requirements.txt
@@ -156,14 +156,14 @@ class Workspace:
         "topic.txt",
         "spec.md",
         ".gitignore",
-        "CLAUDE.md",
+        "AGENTS.md",
     }
     _PROJECT_SCOPED_PREFIXES = (
         "shared/",
         "logs/",
         "current/",
         "iter_",
-        ".claude/",
+        ".codex/",
         ".sibyl/",
         ".venv",
         ".git/",
@@ -481,15 +481,23 @@ class Workspace:
         if (self.root / ".git").exists():
             return
         subprocess.run(["git", "init"], cwd=self.root, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Sibyl Test"],
+            cwd=self.root,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "sibyl@example.com"],
+            cwd=self.root,
+            capture_output=True,
+        )
         gitignore = (
             "*.pyc\n"
             "__pycache__/\n"
             ".DS_Store\n"
             ".venv/\n"
-            "CLAUDE.md\n"
-            ".claude/agents\n"
-            ".claude/skills\n"
-            ".claude/settings.local.json\n"
+            "AGENTS.md\n"
+            ".codex/\n"
             ".sibyl/system.json\n"
         )
         (self.root / ".gitignore").write_text(gitignore, encoding="utf-8")
@@ -528,8 +536,15 @@ class Workspace:
     def _checkpoint_path(self, checkpoint_dir: str) -> Path:
         return self._check_path(f"{checkpoint_dir}/.checkpoint.json")
 
-    def create_checkpoint(self, stage: str, checkpoint_dir: str,
-                          steps: dict[str, str], iteration: int):
+    def create_checkpoint(
+        self,
+        stage: str,
+        checkpoint_dir: str,
+        steps: dict[str, str],
+        iteration: int,
+        *,
+        stage_started_at: float | None = None,
+    ):
         """Create a new checkpoint for a stage with sub-steps.
 
         Args:
@@ -542,7 +557,11 @@ class Workspace:
             "version": 1,
             "stage": stage,
             "iteration": iteration,
-            "stage_started_at": time.time(),
+            "stage_started_at": (
+                float(stage_started_at)
+                if isinstance(stage_started_at, (int, float)) and stage_started_at > 0
+                else time.time()
+            ),
             "steps": {
                 step_id: {
                     "status": "pending",
@@ -581,7 +600,8 @@ class Workspace:
         if not file_path.exists():
             return False
         stat = file_path.stat()
-        if stat.st_mtime < started_at:
+        # Some filesystems expose coarse mtime precision; allow a 1s skew.
+        if stat.st_mtime < started_at - 1.0:
             return False
         if stat.st_size == 0 or stat.st_size != snapshot["file_size"]:
             return False
@@ -643,6 +663,9 @@ class Workspace:
 
         for step_id, step in cp["steps"].items():
             if step["status"] != "completed":
+                remaining.append(step_id)
+                continue
+            if not step.get("completed_at"):
                 remaining.append(step_id)
                 continue
             primary_snapshot = {
@@ -718,10 +741,8 @@ class Workspace:
 
         project_memory_path = self.root / WORKSPACE_PROJECT_MEMORY
         overlays_dir = self.root / WORKSPACE_PROJECT_PROMPT_OVERLAYS
-        claude_path = self.root / "CLAUDE.md"
-        agents_link = self.root / ".claude" / "agents"
-        skills_link = self.root / ".claude" / "skills"
-        settings_link = self.root / ".claude" / "settings.local.json"
+        agents_path = self.root / "AGENTS.md"
+        codex_dir = self.root / ".codex"
         venv_link = self.root / ".venv"
 
         status_path = self.root / "status.json"
@@ -761,16 +782,16 @@ class Workspace:
         if legacy_status_schema:
             warnings.append("Legacy status.json schema")
 
-        claude_generated = False
-        if claude_path.exists():
+        agents_generated = False
+        if agents_path.exists():
             try:
-                claude_generated = claude_path.read_text(encoding="utf-8").startswith(
-                    GENERATED_CLAUDE_HEADER
+                agents_generated = agents_path.read_text(encoding="utf-8").startswith(
+                    GENERATED_AGENTS_HEADER
                 )
             except OSError:
-                warnings.append("Unreadable CLAUDE.md")
+                warnings.append("Unreadable AGENTS.md")
         else:
-            warnings.append("Missing CLAUDE.md")
+            warnings.append("Missing AGENTS.md")
 
         project_overlay_count = 0
         if overlays_dir.exists():
@@ -780,21 +801,14 @@ class Workspace:
 
         if not project_memory_path.exists():
             warnings.append("Missing .sibyl/project/MEMORY.md")
-        if not agents_link.is_symlink() and agents_link.exists():
-            warnings.append(".claude/agents is not a symlink")
-        if not skills_link.is_symlink() and skills_link.exists():
-            warnings.append(".claude/skills is not a symlink")
-        if not settings_link.is_symlink() and settings_link.exists():
-            warnings.append(".claude/settings.local.json is not a symlink")
+        if not codex_dir.exists():
+            warnings.append("Missing .codex runtime directory")
         if not venv_link.is_symlink() and venv_link.exists():
             warnings.append(".venv is not a symlink")
 
-        links_ok = all(
-            path.is_symlink()
-            for path in (agents_link, skills_link, settings_link, venv_link)
-        )
+        links_ok = (not venv_link.exists()) or venv_link.is_symlink()
         project_layer_ok = project_memory_path.exists() and overlays_dir.exists()
-        runtime_ready = bool(system_root) and links_ok and project_layer_ok and claude_generated
+        runtime_ready = bool(system_root) and links_ok and project_layer_ok and agents_generated and codex_dir.exists()
         scaffold_ready = (
             topic_exists
             and config_exists
@@ -813,13 +827,11 @@ class Workspace:
             "project_memory_path": str(project_memory_path),
             "project_memory_exists": project_memory_path.exists(),
             "project_overlay_count": project_overlay_count,
-            "claude_md_generated": claude_generated,
-            "claude_md_path": str(claude_path),
+            "agents_md_generated": agents_generated,
+            "agents_md_path": str(agents_path),
             "links": {
-                "agents": agents_link.is_symlink(),
-                "skills": skills_link.is_symlink(),
-                "settings": settings_link.is_symlink(),
-                "venv": venv_link.is_symlink(),
+                "codex_runtime_dir": codex_dir.exists(),
+                "venv": (not venv_link.exists()) or venv_link.is_symlink(),
             },
             "topic_exists": topic_exists,
             "config_exists": config_exists,

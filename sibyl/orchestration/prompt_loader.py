@@ -296,7 +296,7 @@ def _render_control_plane_loop(workspace_path: str | Path | None = None) -> str:
             textwrap.dedent(
                 f"""
                 You are the Sibyl control plane. The system must keep iterating toward stronger research artifacts and
-                should never enter a manual pause state unless the user explicitly requested `/sibyl-research:stop`.
+                should never enter a manual pause state unless the user explicitly requested `sibyl stop`.
                 The active workspace is `{workspace}`.
                 """
             ).strip(),
@@ -306,13 +306,16 @@ def _render_control_plane_loop(workspace_path: str | Path | None = None) -> str:
             textwrap.dedent(
                 """
                 Use only these repo-local CLIs for orchestration:
-                - `cli_next(workspace)` -> next action payload
-                - `cli_record(workspace, stage)` -> persist stage completion
-                - `cli_resume(workspace)` -> clear manual stop / legacy pause markers and return recovery hints
-                - `cli_status(workspace)` -> inspect current stage and iteration
-                - `cli_dispatch_tasks(workspace)` -> start queued experiment tasks when GPUs free up
-                - `cli_experiment_status(workspace)` -> render the experiment progress panel
-                - `cli_sentinel_session(workspace, session_id, tmux_pane)` / `cli_sentinel_config(workspace)` -> Sentinel helpers
+                - `sibyl next <workspace>` -> next action payload
+                - `sibyl record <workspace> <stage>` -> persist stage completion
+                - `sibyl checkpoint <workspace> <stage> <step_id>` -> persist a checkpoint-tracked sub-step
+                - `sibyl sync <workspace>` -> acknowledge pending Lark sync backlog for Codex-native recovery
+                - `sibyl resume <workspace>` -> clear manual stop / legacy pause markers and return recovery hints
+                - `sibyl status <workspace>` -> inspect current stage and iteration
+                - `sibyl dispatch <workspace>` -> start queued experiment tasks when GPUs free up
+                - `sibyl experiment-status <workspace>` -> render the experiment progress panel
+                - `sibyl sentinel-session <workspace> --session-id <id> --tmux-pane <pane>` / `sibyl sentinel-config <workspace>` -> Sentinel helpers
+                - `sibyl prompt loop <workspace>` -> render the compiled Codex loop contract
                 """
             ).strip(),
         ),
@@ -321,13 +324,13 @@ def _render_control_plane_loop(workspace_path: str | Path | None = None) -> str:
             textwrap.dedent(
                 f"""
                 Before entering the loop:
-                1. Call `cli_status('{workspace}')` to get the current stage and iteration.
+                1. Call `sibyl status '{workspace}'` to get the current stage and iteration.
                 2. For each remaining stage from current through `done`, create a Task:
                    - subject: `[project] #iteration - stage_name`
                    - Chain each Task with `addBlockedBy` pointing to the previous Task ID.
                 3. Track the current stage Task ID for updates inside the loop.
 
-                After each successful `cli_record`:
+                After each successful `sibyl record`:
                 - `TaskUpdate(taskId=current_stage_task, status="completed")`
                 - Advance tracked Task ID to the next stage.
 
@@ -341,21 +344,21 @@ def _render_control_plane_loop(workspace_path: str | Path | None = None) -> str:
             "Loop",
             textwrap.dedent(
                 f"""
-                1. Call `cli_next('{workspace}')`.
+                1. Call `sibyl next '{workspace}'`.
                 2. Export `SIBYL_LANGUAGE=<action.language>` every loop before dispatching any skill.
                 3. Dispatch by `action_type`:
-                   - `skill`: invoke the listed Sibyl skill directly.
-                   - `skills_parallel`: start all listed skills in parallel and wait for all of them.
-                   - `team`: create the requested agent team, assign teammates explicitly, then run post-steps in order.
+                   - `skill`: render the corresponding compiled prompt and execute it in Codex.
+                   - `skills_parallel`: start isolated `codex exec --cd <workspace> --full-auto ...` child runs for all listed skills, then wait for all of them.
+                   - `team`: treat teammates as isolated Codex child runs, collect their artifacts, then run post-steps in order.
                    - `bash`: execute `bash_command`.
                    - `gpu_poll`: keep polling until GPUs free up; never pause on timeout.
                    - `experiment_wait`: keep polling running experiments until all tasks finish; render the status panel each poll.
                    - `done`: emit `SIBYL_PIPELINE_COMPLETE`.
-                   - `stopped`: run `cli_resume('{workspace}')` only when the user asked to continue or resume.
+                   - `stopped`: run `sibyl resume '{workspace}'` only when the user asked to continue or resume.
                      If the resume payload reports pending hooks or background agents, restart them before restarting the loop.
-                4. After successful execution, call `cli_record('{workspace}', action.stage)`.
-                5. If `cli_record` returns `sync_requested: true`, start the background lark sync flow (`run_in_background`)
-                   without blocking the main loop.
+                4. After successful execution, call `sibyl record '{workspace}' <action.stage>`.
+                5. If `sibyl record` returns `sync_requested: true`, immediately run
+                   `sibyl sync '{workspace}'` in the background or another shell without blocking the main loop.
                 """
             ).strip(),
         ),
@@ -364,18 +367,31 @@ def _render_control_plane_loop(workspace_path: str | Path | None = None) -> str:
             textwrap.dedent(
                 f"""
                 For `skill`, `skills_parallel`, or `experiment_wait` actions carrying `experiment_monitor`:
-                - immediately start `experiment_monitor.background_agent` with `run_in_background=true`; do not wait
+                - immediately start `experiment_monitor.background_agent` as an isolated Codex child run; do not wait
                 - treat that background supervisor as the long-lived owner for GPU refresh, queue dispatch, and runtime-drift intervention
                 - treat `experiment_monitor.wake_cmd` as a high-priority inbox from the background supervisor
                 - never sleep for the full poll interval in one chunk; break waiting into `experiment_monitor.wake_check_interval_sec` chunks
                   and call `experiment_monitor.wake_cmd` after each chunk
                 - if the wake payload reports `wake_requested=true`, immediately inspect the returned events before continuing
                 - if any event says `requires_main_system=true` or `kind=needs_main_system`, stop waiting and collaborate now
-                - check remote completion markers via SSH MCP
-                - call `cli_experiment_status('{workspace}')` every poll and show its `display` text directly to the user
-                - when work completes and GPUs free up, call `cli_dispatch_tasks('{workspace}')` and launch any returned skills
+                - check remote completion markers via SSH MCP when available
+                - call `sibyl experiment-status '{workspace}'` every poll and show its `display` text directly to the user
+                - when work completes and GPUs free up, call `sibyl dispatch '{workspace}'` and launch any returned skills
                 - before exiting an experiment wait loop, synchronize experiment recovery state so stage transitions see completed work
                 - adaptive cadence remains: remaining <=30min -> 2min, 30-120min -> 5min, >120min -> 10min
+                """
+            ).strip(),
+        ),
+        PromptSection(
+            "Checkpoint Recovery",
+            textwrap.dedent(
+                f"""
+                If `sibyl next '{workspace}'` returns `checkpoint_info`:
+                - treat `checkpoint_info.remaining_steps` as the only unfinished sub-steps for that stage
+                - after each teammate/sub-step writes its required file, immediately run
+                  `sibyl checkpoint '{workspace}' <action.stage> <step_id>`
+                - if `checkpoint_info.all_complete` is true, skip dispatch and just call
+                  `sibyl record '{workspace}' <action.stage>`
                 """
             ).strip(),
         ),
@@ -384,7 +400,7 @@ def _render_control_plane_loop(workspace_path: str | Path | None = None) -> str:
             textwrap.dedent(
                 f"""
                 Retry transient SSH/network/rate-limit failures with backoff. Fix import/name errors by consulting the approved CLI list.
-                Do not call `cli_pause`. If a legacy pause marker is present, use `cli_resume('{workspace}')` or re-run `cli_next`,
+                Do not call `sibyl stop` unless the user explicitly asked to stop. If a legacy pause marker is present, use `sibyl resume '{workspace}'` or re-run `sibyl next`,
                 then continue automatically.
                 """
             ).strip(),
@@ -419,15 +435,15 @@ def render_control_plane_prompt(
                     f"""
                     1. Read `{workspace}/breadcrumb.json` to recover the last known stage and loop state.
                     2. If `{workspace}/lark_sync/pending_sync.jsonl` still has pending entries, immediately restart
-                       `sibyl-lark-sync` in the background and do not wait for it.
+                       `sibyl sync '{workspace}'` and do not wait for it.
                     3. Read `{workspace}/logs/research_diary.md` for iteration history and context.
                     4. On the first `cli_next('{workspace}')` after a resume/continue, treat the returned action as
                        authoritative recovery state: if it carries `experiment_monitor.background_agent`, restart that
                        background agent before continuing the main loop.
                     5. Follow the compiled control-plane loop below for every iteration.
-                    """
-                ).strip(),
-            ),
+                """
+            ).strip(),
+        ),
             PromptSection(
                 "Control-Plane Loop",
                 _render_control_plane_loop(workspace),
@@ -631,7 +647,7 @@ def cli_write_ralph_prompt(
         project_name = workspace_root.name
     sync_workspace_snapshot(workspace_root)
 
-    output_file = (workspace_root / ".claude" / "ralph-prompt.txt").resolve()
+    output_file = (workspace_root / ".codex" / "loop-prompt.txt").resolve()
     mirror_output: Path | None = None
     if output_path:
         mirror_output = Path(output_path).expanduser()

@@ -88,6 +88,13 @@ def record_result(
             f"Stage mismatch: recording '{stage}' but current is '{current}'"
         )
 
+    reconcile_checkpoint = getattr(orchestrator, "_reconcile_stage_checkpoint", None)
+    if callable(reconcile_checkpoint):
+        try:
+            reconcile_checkpoint(stage)
+        except Exception:
+            pass
+
     if stage == "reflection":
         orchestrator._post_reflection_hook()
 

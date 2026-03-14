@@ -222,6 +222,25 @@ def claim_next_batch(
 _REQUIRED_TASK_FIELDS = ("gpu_count", "estimated_minutes")
 
 
+def _task_matches_mode(task: dict, mode: str) -> bool:
+    """Return whether a task belongs to the requested execution phase."""
+    normalized_mode = str(mode or "").upper()
+    if normalized_mode != "PILOT":
+        return True
+
+    expected_output = str(task.get("expected_output", "")).strip().lower()
+    task_id = str(task.get("id", "")).strip().lower()
+    task_type = str(task.get("type", "")).strip().lower()
+
+    if expected_output.startswith("exp/results/full/") or "/exp/results/full/" in expected_output:
+        return False
+    if task_id.startswith(("full_", "ablation_")):
+        return False
+    if task_type == "ablation":
+        return False
+    return True
+
+
 def validate_task_plan(tasks: list[dict]) -> list[str]:
     """Check that all tasks have required GPU scheduling fields.
 
@@ -503,6 +522,9 @@ def get_next_batch(workspace_root: Path, gpu_ids: list[int], mode: str = "PILOT"
     tasks = plan.get("tasks")
     if not tasks or not isinstance(tasks, list):
         return None
+    tasks = [task for task in tasks if _task_matches_mode(task, mode)]
+    if not tasks:
+        return None
 
     # Load progress (completed + running)
     completed, running_ids, _, _ = _load_progress(workspace_root)
@@ -553,6 +575,9 @@ def get_batch_info(workspace_root: Path, gpu_ids: list[int], mode: str = "PILOT"
 
     tasks = plan.get("tasks")
     if not tasks or not isinstance(tasks, list):
+        return None
+    tasks = [task for task in tasks if _task_matches_mode(task, mode)]
+    if not tasks:
         return None
 
     # Load progress (completed + running)

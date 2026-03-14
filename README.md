@@ -6,7 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> Inspired by the pioneering work of [The AI Scientist](https://github.com/SakanaAI/AI-Scientist), [FARS](https://analemma.ai/blog/introducing-fars/), and [AutoResearch](https://github.com/karpathy/autoresearch), Sibyl takes the vision further by building natively on [Claude Code](https://docs.anthropic.com/en/docs/claude-code) to fully leverage its agent ecosystem — skills, plugins, MCP servers, and multi-agent teams.
+> Inspired by the pioneering work of [The AI Scientist](https://github.com/SakanaAI/AI-Scientist), [FARS](https://analemma.ai/blog/introducing-fars/), and [AutoResearch](https://github.com/karpathy/autoresearch), Sibyl now targets a **Codex CLI native** workflow built around `AGENTS.md`, repo-local `sibyl` commands, MCP servers, and isolated `codex exec` child runs.
 
 [中文文档](README_CN.md)
 
@@ -21,36 +21,32 @@ What truly sets Sibyl apart is its **dual-loop architecture**:
 
 - **Autonomous Multi-Dimensional Iteration** — Not just "run experiments and write a paper." Every aspect of the research improves automatically across iterations: ideas sharpen through multi-agent debate, experiments expand with better baselines and ablations, writing tightens under 6-agent cross-review, and resource utilization optimizes through GPU scheduling feedback. The quality gate decides when to stop or pivot — no human in the loop.
 - **Self-Evolving System** — Most AI research tools are static — they run the same way every time. Sibyl evolves. It extracts lessons from every research iteration (issues, success patterns, efficiency metrics), keeps them time-weighted and context-filtered, and injects the relevant ones back into agent prompts. Across projects, the system accumulates institutional knowledge — each project makes every future project better.
-- **Claude Code Native** — Not a wrapper around API calls. Built directly on Claude Code's architecture (fork skills, agent teams, MCP tools), inheriting its full ecosystem: SSH remote execution, multi-model collaboration (Claude + GPT-5.4 cross-review), Feishu/Lark cloud sync, and more.
+- **Codex CLI Native** — Not a wrapper around API calls. Built around Codex CLI, `AGENTS.md`, MCP tools, repo-local orchestration commands, and optional `codex exec` child runs for isolated roles.
 
 ---
 
 ## Get Started
 
-### Recommended: Let Claude Configure Everything
+### Recommended: Run It With Codex CLI
 
-The fastest way to set up Sibyl is to let Claude Code do it for you. Clone the repo, open it in Claude Code, and ask:
+Clone the repo, create the local environment, and start Codex from either the repo root or a workspace root:
 
 ```bash
 git clone https://github.com/Sibyl-Research-Team/sibyl-research-system.git
 cd sibyl-research-system
+chmod +x setup.sh && ./setup.sh
 tmux new -s sibyl                                           # recommended: persistent session
-claude --plugin-dir ./plugin --dangerously-skip-permissions
+codex
 ```
 
-> ⚠️ `--dangerously-skip-permissions` grants Claude Code unrestricted execution (shell commands, file I/O, MCP calls) without confirmation. It is strongly recommended for Sibyl's autonomous multi-agent workflow (hundreds of tool calls per iteration), but should only be used on dedicated research machines. See [Manual Setup](#manual-setup) for full details and mitigation advice.
-
-Then tell Claude:
-
-> **"Help me set up Sibyl Research System. Read docs/setup-guide.md and configure everything."**
-
-Claude will automatically check your environment, install dependencies, configure MCP servers, create config files, and ask you only for what it can't detect (GPU server IP, username, etc.). The [setup guide](docs/setup-guide.md) is a step-by-step checklist designed for Claude to follow.
-
-Once setup is complete, run the init command inside Claude Code to verify the installation and prepare your first workspace:
+Then either use the shell entrypoints directly:
 
 ```
-/sibyl-research:init
+sibyl start spec.md
+sibyl continue .
 ```
+
+or ask Codex to read `AGENTS.md` plus `.codex/loop-prompt.txt` in the target workspace and continue the Sibyl control loop.
 
 ### Manual Setup
 
@@ -60,10 +56,9 @@ Once setup is complete, run the init command inside Claude Code to verify the in
 #### Prerequisites
 
 - Python 3.12+, Node.js 18+
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+- [Codex CLI](https://openai.com/index/introducing-the-codex-app/)
 - GPU server with SSH access
-- `ANTHROPIC_API_KEY` environment variable
-- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` environment variable
+- `OPENAI_API_KEY` when using Codex MCP or non-ChatGPT auth flows
 - **tmux** (strongly recommended) — enables persistent sessions and automatic recovery via Sentinel watchdog. Install: `brew install tmux` (macOS) / `apt install tmux` (Linux)
 
 #### 1. Install
@@ -74,17 +69,17 @@ cd sibyl-research-system
 chmod +x setup.sh && ./setup.sh    # Interactive: creates venv, installs deps, configures MCP
 ```
 
-`setup.sh` also adds or updates `export SIBYL_ROOT="..."` in your shell rc file so workspace-root Claude sessions can still resolve the repo plugin and tools.
+`setup.sh` also adds or updates `export SIBYL_ROOT="..."` in your shell rc file so workspace-root Codex sessions and helper scripts can resolve the repo root.
 
 #### 2. Configure MCP Servers
 
-Two MCP servers are required. `setup.sh` configures them interactively, but for manual setup the preferred path is `claude mcp add --scope local ...` so the configuration stays repo-scoped:
+Two MCP servers are required. `setup.sh` configures them interactively, but for manual setup the preferred path is `codex mcp add ...` so the configuration stays Codex-scoped:
 
 ```bash
-claude mcp add --scope local ssh-mcp-server -- npx -y @fangjunjie/ssh-mcp-server \
+codex mcp add ssh-mcp-server -- npx -y @fangjunjie/ssh-mcp-server \
   --host YOUR_GPU_IP --port 22 --username YOUR_USER --privateKey ~/.ssh/id_ed25519
 
-claude mcp add --scope local arxiv-mcp-server -- /ABSOLUTE/PATH/TO/sibyl-research-system/.venv/bin/python3 -m arxiv_mcp_server
+codex mcp add arxiv-mcp-server -- /ABSOLUTE/PATH/TO/sibyl-research-system/.venv/bin/python3 -m arxiv_mcp_server
 ```
 
 If you already manage Claude Code MCP servers through JSON, update the existing MCP config instead of creating a second source of truth:
@@ -132,30 +127,23 @@ export SIBYL_ROOT=/path/to/sibyl-system
 # Repo root: setup, init, status, migrate, evolve
 cd "$SIBYL_ROOT"
 tmux new -s sibyl-admin
-claude --plugin-dir "$SIBYL_ROOT/plugin" --dangerously-skip-permissions
+codex
 
 # Workspace root: actual project execution (recommended)
 cd "$SIBYL_ROOT/workspaces/my-project"
 tmux new -s sibyl-my-project
-claude --plugin-dir "$SIBYL_ROOT/plugin" --dangerously-skip-permissions
+codex
 
-# Inside Claude Code (repo root) — run once after installation:
-/sibyl-research:init              # Verify installation and prepare first workspace
-
-# Inside Claude Code launched from workspaces/my-project:
-/sibyl-research:start spec.md     # New project from this workspace's spec
-/sibyl-research:continue .        # Resume the current workspace
+# Shell entrypoints:
+sibyl start spec.md               # New project from this workspace's spec
+sibyl continue .                  # Resume the current workspace
 ```
 
-> **Why tmux?** Sibyl experiments can run for hours. Running inside tmux ensures the session persists through terminal disconnections. The Sentinel watchdog (auto-launched by `/sibyl-research:start`) runs in a sibling tmux pane and automatically restarts Claude Code if it crashes or goes idle — enabling truly unattended autonomous research.
+> **Why tmux?** Sibyl experiments can run for hours. Running inside tmux ensures the session persists through terminal disconnections. The Sentinel watchdog runs in a sibling tmux pane and automatically restarts Codex if it crashes or goes idle.
 
-> **Which directory should Claude start in?** Use the **repo root** only for setup and global maintenance (`/sibyl-research:init`, `:status`, `:migrate`, `:evolve`). For an actual research run, start Claude from the target **workspace root** (`workspaces/<project>/`), not from the repo root and not from `workspaces/<project>/current`. This makes Claude load the workspace-specific `CLAUDE.md`, `.claude/` links, Ralph prompt, and project memory directly.
+> **Which directory should Codex start in?** Use the **repo root** only for setup and global maintenance. For an actual research run, start Codex from the target **workspace root** (`workspaces/<project>/`), not from the repo root and not from `workspaces/<project>/current`. This makes Codex load the workspace-specific `AGENTS.md`, `.codex/loop-prompt.txt`, and project memory directly.
 
-> **Parallel projects:** run **one Claude session/pane per workspace root**. Example: pane A starts in `workspaces/ttt-dlm/`, pane B starts in `workspaces/dlm-improve/`. Do not reuse the same Claude pane/session across multiple projects; Sibyl now treats pane/session ownership as project-scoped.
-
-> **Why `--dangerously-skip-permissions`?** Sibyl orchestrates 20+ agents across 19 pipeline stages, each involving dozens of tool calls (file I/O, SSH commands, MCP server calls, sub-agent spawning). Without this flag, Claude Code will prompt for permission on nearly every operation, making autonomous research impossible — you'd need to approve hundreds of prompts per iteration. The flag skips all permission confirmations, enabling true end-to-end automation.
->
-> **⚠️ Risks**: This flag allows Claude Code to execute **any** shell command, read/write **any** file, and make **any** MCP call without confirmation. Only use it in environments where you trust the system and have reviewed the codebase. Do not use it on machines with sensitive data outside the project directory. Consider running in a container or VM for additional isolation.
+> **Parallel projects:** run **one Codex session/pane per workspace root**.
 
 </details>
 

@@ -1,7 +1,7 @@
-"""CLI entry point for Sibyl pipeline (Claude Code native mode).
+"""CLI entry point for the Sibyl pipeline (Codex CLI native mode).
 
 Provides auxiliary commands for status, evolution, and sync.
-The primary workflow runs through Claude Code's /sibyl-start skill.
+The primary workflow runs through repo-local `sibyl` commands plus Codex.
 """
 import argparse
 import os
@@ -50,14 +50,21 @@ def main():
     ensure_repo_venv_python()
 
     parser = argparse.ArgumentParser(
-        description="Sibyl Research System - 西比拉自动化研究系统 (Claude Code Native)",
+        description="Sibyl Research System - 西比拉自动化研究系统 (Codex CLI Native)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Primary usage: Use /sibyl-start in Claude Code to run the pipeline.
+Primary usage:
+  sibyl start spec.md        Initialize a workspace from spec.md for Codex CLI
+  sibyl continue .           Resume the current workspace loop
+  sibyl prompt loop .        Render the compiled Codex control-plane prompt
+  sibyl checkpoint . stage step_id
+                             Persist one checkpoint-tracked sub-step
+  sibyl sync .               Acknowledge pending Lark sync backlog in Codex mode
 
 Auxiliary commands:
   sibyl status              Show all projects
-  sibyl status <project>    Show detailed project status
+  sibyl status <project>    Show project dashboard entry
+  sibyl status <workspace>  Show machine-readable workspace status JSON
   sibyl evolve              Trigger evolution analysis
   sibyl evolve --apply      Apply evolution patches
   sibyl migrate --all       Align existing workspaces to layered runtime
@@ -65,9 +72,44 @@ Auxiliary commands:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    start_p = sub.add_parser("start", help="Initialize or refresh a workspace from spec.md")
+    start_p.add_argument("spec_path", help="Path to spec.md")
+    start_p.add_argument("--config", help="Path to config YAML")
+
+    continue_p = sub.add_parser("continue", help="Resume the Codex loop for a workspace")
+    continue_p.add_argument("workspace", nargs="?", default=".", help="Workspace path (default: .)")
+
+    resume_p = sub.add_parser("resume", help="Clear manual stop markers and resume a workspace")
+    resume_p.add_argument("workspace", nargs="?", default=".", help="Workspace path (default: .)")
+
+    stop_p = sub.add_parser("stop", help="Request a manual stop for a workspace")
+    stop_p.add_argument("workspace", nargs="?", default=".", help="Workspace path (default: .)")
+
+    next_p = sub.add_parser("next", help="Get the next orchestration action for a workspace")
+    next_p.add_argument("workspace", help="Workspace path")
+
+    record_p = sub.add_parser("record", help="Record a completed stage")
+    record_p.add_argument("workspace", help="Workspace path")
+    record_p.add_argument("stage", help="Completed stage")
+    record_p.add_argument("--result", default="", help="Optional result summary")
+    record_p.add_argument("--score", type=float, default=None, help="Optional stage score")
+
+    checkpoint_p = sub.add_parser("checkpoint", help="Mark a checkpoint sub-step as completed")
+    checkpoint_p.add_argument("workspace", help="Workspace path")
+    checkpoint_p.add_argument("stage", help="Stage name")
+    checkpoint_p.add_argument("step_id", help="Checkpoint step id")
+
+    sync_p = sub.add_parser("sync", help="Acknowledge pending Lark sync backlog")
+    sync_p.add_argument("workspace", nargs="?", default=".", help="Workspace path (default: .)")
+
+    prompt_p = sub.add_parser("prompt", help="Render a compiled Codex runtime prompt")
+    prompt_p.add_argument("kind", choices=["loop"], help="Prompt kind")
+    prompt_p.add_argument("workspace", nargs="?", default=".", help="Workspace path (default: .)")
+    prompt_p.add_argument("--output", help="Optional output file path")
+
     # --- status ---
     status_p = sub.add_parser("status", help="Project status dashboard")
-    status_p.add_argument("project", nargs="?", help="Project name (shows all if omitted)")
+    status_p.add_argument("target", nargs="?", help="Project name or workspace path")
     status_p.add_argument("--config", help="Path to config YAML")
 
     # --- evolve ---
@@ -124,10 +166,26 @@ Auxiliary commands:
     exp_supervisor_snapshot_p = sub.add_parser("experiment-supervisor-snapshot", help="Internal experiment supervisor snapshot helper")
     exp_supervisor_snapshot_p.add_argument("workspace", help="Workspace path")
 
+    sentinel_session_p = sub.add_parser("sentinel-session", help="Persist Codex session ownership for Sentinel")
+    sentinel_session_p.add_argument("workspace", help="Workspace path")
+    sentinel_session_p.add_argument("--session-id", default="", help="Codex session id")
+    sentinel_session_p.add_argument("--tmux-pane", default="", help="tmux pane id")
+
+    sentinel_config_p = sub.add_parser("sentinel-config", help="Show Sentinel status for a workspace")
+    sentinel_config_p.add_argument("workspace", help="Workspace path")
+
     record_gpu_poll_p = sub.add_parser("record-gpu-poll", help="Internal GPU polling snapshot helper")
     record_gpu_poll_p.add_argument("workspace", help="Workspace path")
     record_gpu_poll_p.add_argument("--nvidia-smi-output", required=True, help="Raw nvidia-smi CSV output")
     record_gpu_poll_p.add_argument("--source", default="experiment_supervisor", help="Snapshot source label")
+
+    local_gpu_poll_p = sub.add_parser("local-gpu-poll", help="Run local GPU polling without SSH")
+    local_gpu_poll_p.add_argument("workspace", help="Workspace path")
+
+    local_experiment_run_p = sub.add_parser("local-experiment-run", help="Run one local experiment batch")
+    local_experiment_run_p.add_argument("workspace", help="Workspace path")
+    local_experiment_run_p.add_argument("--mode", required=True, choices=["PILOT", "FULL"])
+    local_experiment_run_p.add_argument("--batch-json", required=True, help="Claimed batch JSON")
 
     requeue_exp_task_p = sub.add_parser("requeue-experiment-task", help="Internal experiment retry helper")
     requeue_exp_task_p.add_argument("workspace", help="Workspace path")
@@ -164,6 +222,64 @@ Auxiliary commands:
     if args.command == "dispatch":
         from sibyl.orchestrate import cli_dispatch_tasks
         cli_dispatch_tasks(args.workspace)
+        return
+
+    if args.command == "start":
+        from sibyl.orchestrate import cli_init_from_spec, cli_write_ralph_prompt
+
+        result = cli_init_from_spec(args.spec_path, config_path=getattr(args, "config", None))
+        workspace_path = result["workspace_path"]
+        cli_write_ralph_prompt(workspace_path)
+        return
+
+    if args.command == "continue":
+        from sibyl.orchestrate import cli_resume, cli_write_ralph_prompt
+
+        cli_resume(args.workspace)
+        cli_write_ralph_prompt(args.workspace)
+        return
+
+    if args.command == "resume":
+        from sibyl.orchestrate import cli_resume, cli_write_ralph_prompt
+
+        cli_resume(args.workspace)
+        cli_write_ralph_prompt(args.workspace)
+        return
+
+    if args.command == "stop":
+        from sibyl.orchestrate import cli_pause
+
+        cli_pause(args.workspace, "user_stop")
+        return
+
+    if args.command == "next":
+        from sibyl.orchestrate import cli_next
+
+        cli_next(args.workspace)
+        return
+
+    if args.command == "record":
+        from sibyl.orchestrate import cli_record
+
+        cli_record(args.workspace, args.stage, result=args.result, score=args.score)
+        return
+
+    if args.command == "checkpoint":
+        from sibyl.orchestrate import cli_checkpoint
+
+        cli_checkpoint(args.workspace, args.stage, args.step_id)
+        return
+
+    if args.command == "sync":
+        from sibyl.orchestrate import cli_sync
+
+        cli_sync(args.workspace)
+        return
+
+    if args.command == "prompt":
+        from sibyl.orchestrate import cli_write_ralph_prompt
+
+        cli_write_ralph_prompt(args.workspace, output_path=args.output)
         return
 
     if args.command == "experiment-status":
@@ -222,12 +338,40 @@ Auxiliary commands:
         cli_experiment_supervisor_snapshot(args.workspace)
         return
 
+    if args.command == "sentinel-session":
+        from sibyl.orchestrate import cli_sentinel_session
+
+        cli_sentinel_session(args.workspace, args.session_id, args.tmux_pane)
+        return
+
+    if args.command == "sentinel-config":
+        from sibyl.orchestrate import cli_sentinel_config
+
+        cli_sentinel_config(args.workspace)
+        return
+
     if args.command == "record-gpu-poll":
         from sibyl.orchestrate import cli_record_gpu_poll
         cli_record_gpu_poll(
             args.workspace,
             args.nvidia_smi_output,
             source=args.source,
+        )
+        return
+
+    if args.command == "local-gpu-poll":
+        from sibyl.orchestration.local_runtime import cli_local_gpu_poll
+
+        cli_local_gpu_poll(args.workspace)
+        return
+
+    if args.command == "local-experiment-run":
+        from sibyl.orchestration.local_runtime import cli_local_experiment_run
+
+        cli_local_experiment_run(
+            args.workspace,
+            args.mode,
+            args.batch_json,
         )
         return
 
@@ -288,7 +432,14 @@ Auxiliary commands:
     config = load_effective_config(config_path=getattr(args, "config", None))
 
     if args.command == "status":
-        _status_dashboard(config, getattr(args, "project", None))
+        from pathlib import Path
+        from sibyl.orchestrate import cli_status as workspace_status
+
+        target = getattr(args, "target", None)
+        if target and Path(target).expanduser().exists():
+            workspace_status(target)
+        else:
+            _status_dashboard(config, target)
 
     elif args.command == "evolve":
         _evolve(apply=args.apply, reset=args.reset, show=args.show)

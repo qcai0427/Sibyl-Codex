@@ -79,7 +79,7 @@ class TestSessionPersistence:
         assert data["session_id"] == "abc-123-def"
         assert data["tmux_pane"] == "%1"
         assert data["ownership_conflict"] is False
-        assert data["ralph_prompt_path"].endswith("/.claude/ralph-prompt.txt")
+        assert data["ralph_prompt_path"].endswith("/.codex/loop-prompt.txt")
         assert "saved_at" in data
 
     def test_conflicting_workspace_claim_reports_ownership_conflict(self, workspace, tmp_path):
@@ -134,7 +134,7 @@ class TestSentinelConfig:
         assert data["auto_resume_pending"] is False
         assert data["should_keep_running"] is True
         assert data["watchdog_allowed"] is True
-        assert data["ralph_prompt_path"].endswith("/.claude/ralph-prompt.txt")
+        assert data["ralph_prompt_path"].endswith("/.codex/loop-prompt.txt")
         assert "heartbeat" in data
         assert data["heartbeat"]["stage"] == "experiment_cycle"
         assert data["recovery"]["pending_sync_count"] == 1

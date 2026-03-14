@@ -6,7 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> 受 [The AI Scientist](https://github.com/SakanaAI/AI-Scientist)、[FARS](https://analemma.ai/blog/introducing-fars/) 和 [AutoResearch](https://github.com/karpathy/autoresearch) 等先驱工作的启发，Sibyl 在此基础上更进一步，原生构建于 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 之上，充分利用其 Agent 生态——Skills、Plugins、MCP Servers 和多 Agent 团队。
+> 受 [The AI Scientist](https://github.com/SakanaAI/AI-Scientist)、[FARS](https://analemma.ai/blog/introducing-fars/) 和 [AutoResearch](https://github.com/karpathy/autoresearch) 等先驱工作的启发，Sibyl 现在以 **Codex CLI 原生工作流** 为目标，围绕 `AGENTS.md`、仓库内 `sibyl` 命令、MCP Servers 和隔离式 `codex exec` 子运行来组织控制面。
 
 [English](README.md)
 
@@ -21,35 +21,31 @@ Sibyl 真正的独特之处在于其**双循环架构**：
 
 - **全维度自主迭代** — 不只是"跑实验、写论文"。研究的每个方面都在迭代中自动优化：想法通过多 Agent 辩论不断打磨，实验通过追加 baseline 和 ablation 不断完善，论文在 6 Agent 交叉评审下不断修订，资源利用通过 GPU 调度反馈持续优化。质量门控决定何时停止或转向——无需人工介入。
 - **自进化系统** — 大多数 AI 研究工具是静态的——每次运行方式相同。Sibyl 会进化。它从每次研究迭代中提取经验（问题、成功模式、效率指标），按时间衰减和上下文相关性进行管理，并把相关改进重新注入 Agent Prompt。跨项目积累的知识让系统拥有「机构记忆」——每个项目都让所有未来项目受益。
-- **Claude Code 原生架构** — 不是 API 调用的封装。直接构建在 Claude Code 架构上（fork skills、agent teams、MCP tools），天然继承其完整生态：SSH 远程执行、多模型协作（Claude + GPT-5.4 交叉审查）、飞书云同步等。
+- **Codex CLI 原生架构** — 不是 API 调用的封装。围绕 Codex CLI、`AGENTS.md`、仓库内控制命令和 MCP 工具来运行，必要时通过 `codex exec` 启动隔离子任务。
 
 ---
 
 ## 快速上手
 
-### 推荐：让 Claude 自动配置
+### 推荐：直接用 Codex CLI 运行
 
-最快的上手方式是让 Claude Code 帮你完成全部配置。克隆仓库，在 Claude Code 中打开，然后一句话搞定：
+克隆仓库、创建环境，然后从仓库根目录或 workspace 根目录启动 Codex：
 
 ```bash
 git clone https://github.com/Sibyl-Research-Team/sibyl-research-system.git
 cd sibyl-research-system
-claude --plugin-dir ./plugin --dangerously-skip-permissions
+chmod +x setup.sh && ./setup.sh
+codex
 ```
 
-> ⚠️ `--dangerously-skip-permissions` 允许 Claude Code 不经确认地执行任意 shell 命令、读写文件和 MCP 调用。Sibyl 的多 Agent 自主工作流（每轮迭代数百次工具调用）强烈建议使用此标志，但应仅在专用研究机器上使用。详见[手动配置](#手动配置)中的完整说明和风险缓解建议。
-
-然后告诉 Claude：
-
-> **"帮我配置 Sibyl Research System，读取 docs/setup-guide.md 然后自动配置所有环境。"**
-
-Claude 会自动检测你的环境、安装依赖、配置 MCP 服务器、创建配置文件，只在检测不到的信息（GPU 服务器 IP、用户名等）时询问你。[配置指南](docs/setup-guide.md)是一份专为 Claude 设计的分步检查清单。
-
-配置完成后，在 Claude Code 中运行初始化命令，验证安装并准备第一个 workspace：
+然后直接用 shell 入口：
 
 ```
-/sibyl-research:init
+sibyl start spec.md
+sibyl continue .
 ```
+
+或者让 Codex 在目标 workspace 中读取 `AGENTS.md` 和 `.codex/loop-prompt.txt`，按 Sibyl control-plane 协议继续执行。
 
 ### 手动配置
 
@@ -59,10 +55,9 @@ Claude 会自动检测你的环境、安装依赖、配置 MCP 服务器、创�
 #### 环境要求
 
 - Python 3.12+、Node.js 18+
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+- Codex CLI
 - 可 SSH 访问的 GPU 服务器
-- `ANTHROPIC_API_KEY` 环境变量
-- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` 环境变量
+- 需要时配置 `OPENAI_API_KEY`
 
 #### 1. 安装
 
@@ -72,17 +67,17 @@ cd sibyl-research-system
 chmod +x setup.sh && ./setup.sh    # 交互式：创建 venv、安装依赖、配置 MCP
 ```
 
-`setup.sh` 还会自动把 `export SIBYL_ROOT="..."` 写入或更新到你的 shell rc 文件（`~/.zshrc` / `~/.bashrc`），这样即使从 workspace 根目录启动 Claude，也能定位到仓库内的插件和工具。
+`setup.sh` 还会自动把 `export SIBYL_ROOT="..."` 写入或更新到你的 shell rc 文件（`~/.zshrc` / `~/.bashrc`），这样即使从 workspace 根目录启动 Codex，也能定位到仓库根目录和辅助脚本。
 
 #### 2. 配置 MCP 服务器
 
-需要两个 MCP 服务器。`setup.sh` 会交互式配置，但手动配置时更推荐使用 `claude mcp add --scope local ...`，这样配置默认只作用于当前仓库：
+需要两个 MCP 服务器。`setup.sh` 会交互式配置，但手动配置时更推荐使用 `codex mcp add ...`：
 
 ```bash
-claude mcp add --scope local ssh-mcp-server -- npx -y @fangjunjie/ssh-mcp-server \
+codex mcp add ssh-mcp-server -- npx -y @fangjunjie/ssh-mcp-server \
   --host 你的GPU服务器IP --port 22 --username 你的用户名 --privateKey ~/.ssh/id_ed25519
 
-claude mcp add --scope local arxiv-mcp-server -- /ABSOLUTE/PATH/TO/sibyl-research-system/.venv/bin/python3 -m arxiv_mcp_server
+codex mcp add arxiv-mcp-server -- /ABSOLUTE/PATH/TO/sibyl-research-system/.venv/bin/python3 -m arxiv_mcp_server
 ```
 
 如果你已经通过 JSON 管理 Claude Code MCP，请更新现有配置，而不是再维护第二份配置源：
@@ -130,28 +125,23 @@ export SIBYL_ROOT=/path/to/sibyl-system
 # 仓库根目录：用于初始化、全局状态查看、迁移、evolve
 cd "$SIBYL_ROOT"
 tmux new -s sibyl-admin
-claude --plugin-dir "$SIBYL_ROOT/plugin" --dangerously-skip-permissions
+codex
 
 # 项目 workspace 根目录：真正运行该项目（推荐）
 cd "$SIBYL_ROOT/workspaces/my-project"
 tmux new -s sibyl-my-project
-claude --plugin-dir "$SIBYL_ROOT/plugin" --dangerously-skip-permissions
+codex
 
-# 在仓库根目录启动的 Claude Code 中 —— 安装完成后运行一次：
-/sibyl-research:init              # 验证安装并准备第一个 workspace
-
-# 在从 workspaces/my-project 启动的 Claude Code 中：
-/sibyl-research:start spec.md     # 用当前 workspace 的 spec 启动新项目
-/sibyl-research:continue .        # 恢复当前 workspace
+# Shell 入口：
+sibyl start spec.md               # 用当前 workspace 的 spec 启动新项目
+sibyl continue .                  # 恢复当前 workspace
 ```
 
-> **为什么需要 `--dangerously-skip-permissions`？** Sibyl 编排 20+ 个 Agent 执行 19 个 Pipeline 阶段，每个阶段涉及数十次工具调用（文件读写、SSH 命令、MCP 服务器调用、子 Agent 生成等）。不加此标志时，Claude Code 几乎每次操作都会弹出权限确认提示，使全自主研究完全不可行——每轮迭代你需要手动确认数百次。此标志跳过所有权限确认，实现真正的端到端自动化。
->
-> **⚠️ 风险提示**：此标志允许 Claude Code **不经确认**地执行**任意** shell 命令、读写**任意**文件、发起**任意** MCP 调用。仅在你信任系统且已审查过代码的环境中使用。不要在存放敏感数据的机器上使用（项目目录外的数据可能被访问）。建议在容器或虚拟机中运行以获得额外的隔离保护。
+> **为什么需要 tmux？** Sibyl 的实验经常会长时间运行。放在 tmux 中可以避免终端断开导致流程中止，Sentinel 看门狗也会在相邻 pane 中自动拉起 Codex。
 
-> **Claude 应该从哪个目录启动？** 仓库根目录只建议用于初始化和全局维护（`/sibyl-research:init`、`:status`、`:migrate`、`:evolve`）。真正跑某个研究项目时，应该从该项目的 **workspace 根目录** `workspaces/<project>/` 启动 Claude，而不是仓库根目录，也不要从 `workspaces/<project>/current` 启动。这样 Claude 会直接加载该项目专属的 `CLAUDE.md`、`.claude/` 运行时链接、Ralph prompt 和项目记忆。
+> **Codex 应该从哪个目录启动？** 仓库根目录只建议用于初始化和全局维护。真正运行项目时，请从对应的 **workspace 根目录** `workspaces/<project>/` 启动 Codex，这样它会直接读取该项目的 `AGENTS.md`、`.codex/loop-prompt.txt` 和项目记忆。
 
-> **多项目并行建议**：每个项目使用 **独立的 Claude session / tmux pane**，分别从各自的 `workspaces/<project>/` 根目录启动。例如 pane A 跑 `workspaces/ttt-dlm/`，pane B 跑 `workspaces/dlm-improve/`。不要让多个项目共用同一个 Claude pane/session；Sibyl 现在会把 pane/session 归属强绑定到项目。
+> **多项目并行建议**：每个项目使用 **独立的 Codex session / tmux pane**。
 
 </details>
 

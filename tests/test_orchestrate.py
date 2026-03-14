@@ -9,7 +9,7 @@ import pytest
 from sibyl.orchestrate import (
     FarsOrchestrator, load_prompt, load_common_prompt,
     render_skill_prompt, render_control_plane_prompt,
-    PAPER_SECTIONS, cli_checkpoint, cli_dispatch_tasks, cli_resume,
+    PAPER_SECTIONS, cli_checkpoint, cli_dispatch_tasks, cli_resume, cli_sync,
     project_marker_file, self_heal_monitor_script,
     cli_experiment_status, cli_next, migrate_workspace, collect_dashboard_data,
     cli_experiment_supervisor_claim, cli_experiment_supervisor_heartbeat,
@@ -232,6 +232,30 @@ class TestBackgroundSync:
         output = json.loads(captured.out)
         assert "lark_sync_status" not in output
 
+    def test_cli_sync_acknowledges_backlog_for_resume(
+        self, make_orchestrator, capsys, monkeypatch
+    ):
+        o = make_orchestrator(stage="literature_search", lark_enabled=True)
+        o.ws.write_file("config.yaml", "lark_enabled: true\ngpu_poll_enabled: false\n")
+        monkeypatch.chdir(o.ws.root)
+
+        from sibyl.orchestrate import cli_record
+
+        cli_record(str(o.ws.root), "literature_search")
+        capsys.readouterr()
+
+        sync_result = cli_sync(str(o.ws.root))
+        capsys.readouterr()
+        assert sync_result["state"] == "deferred"
+
+        resume_result = cli_resume(str(o.ws.root))
+        capsys.readouterr()
+        assert resume_result["recovery"]["pending_sync_count"] == 0
+
+        sync_status = json.loads((o.ws.root / "lark_sync" / "sync_status.json").read_text())
+        assert sync_status["state"] == "deferred"
+        assert sync_status["last_attempted_line"] == 1
+
     def test_cli_resume_reports_pending_hook_and_background_agent(self, make_orchestrator, capsys):
         from sibyl.experiment_recovery import (
             ExperimentState, register_task, save_experiment_state,
@@ -323,7 +347,7 @@ class TestBackgroundSync:
         output = json.loads(capsys.readouterr().out)
         assert output["stage"] == "planning"
         assert not (proj / ".sibyl" / "system.json").exists()
-        assert not (proj / "CLAUDE.md").exists()
+        assert not (proj / "AGENTS.md").exists()
 
 
 # ══════════════════════════════════════════════
@@ -1677,7 +1701,7 @@ class TestPromptLoading:
     def test_render_control_plane_prompt_compiles_loop(self):
         prompt = render_control_plane_prompt("loop", workspace_path="workspaces/demo")
         assert "# Sibyl Control-Plane Loop" in prompt
-        assert "cli_next('workspaces/demo')" in prompt
+        assert "sibyl next 'workspaces/demo'" in prompt
         assert "sync_requested: true" in prompt
         assert "wake_cmd" in prompt
         assert "requires_main_system=true" in prompt
@@ -1870,7 +1894,7 @@ class TestMigration:
         assert payload["status"]["name"] == "dashboard-bare"
         assert payload["runtime"]["runtime_ready"] is False
         assert not (proj / ".sibyl" / "system.json").exists()
-        assert not (proj / "CLAUDE.md").exists()
+        assert not (proj / "AGENTS.md").exists()
 
 
 # ══════════════════════════════════════════════
@@ -2312,6 +2336,25 @@ class TestCheckpointIntegration:
         assert action["checkpoint_info"] is not None
         cp = o.ws.load_checkpoint("writing/sections")
         assert cp is not None
+
+    def test_record_result_reconciles_idea_debate_checkpoint(self, make_orchestrator):
+        o = make_orchestrator(stage="idea_debate")
+        o.get_next_action()
+        for role in [
+            "innovator",
+            "pragmatist",
+            "theoretical",
+            "contrarian",
+            "interdisciplinary",
+            "empiricist",
+        ]:
+            o.ws.write_file(f"idea/perspectives/{role}.md", f"# {role}\nCandidate idea.\n")
+
+        o.record_result("idea_debate")
+
+        cp = o.ws.validate_checkpoint("idea", current_iteration=0)
+        assert cp is not None
+        assert cp["remaining"] == []
 
     def test_writing_sections_cli_checkpoint_requires_visual_artifacts(
         self, make_orchestrator, capsys

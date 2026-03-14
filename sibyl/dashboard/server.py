@@ -130,8 +130,8 @@ def create_app(config: Config | None = None) -> Flask:
                 1 for p in projects if p.get("runtime", {}).get("legacy_status_schema")
             ),
             "prompt_count": len(list((REPO_ROOT / "sibyl" / "prompts").glob("*.md"))),
-            "skill_count": len(list((REPO_ROOT / ".claude" / "skills").glob("*/SKILL.md"))),
-            "agent_count": len(list((REPO_ROOT / ".claude" / "agents").glob("*.md"))),
+            "skill_count": len(list((REPO_ROOT / "sibyl" / "prompts").glob("*.md"))),
+            "agent_count": 0,
             "tool_count": len(repo_tools),
             "tool_names": repo_tools,
             "evolution_dir": str(evolution_dir.resolve()),
@@ -224,7 +224,7 @@ def create_app(config: Config | None = None) -> Flask:
 
         files = []
         dirs = []
-        skip = {".git", "__pycache__", ".venv", "node_modules", ".claude"}
+        skip = {".git", "__pycache__", ".venv", "node_modules", ".claude", ".codex"}
         allow_hidden = {".sibyl"}
         try:
             for item in sorted(target.iterdir()):

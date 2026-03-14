@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import datetime as dt
 import json
 import time
 from contextlib import contextmanager
@@ -51,6 +52,28 @@ def _count_jsonl_entries(path: Path) -> int:
         return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
     except OSError:
         return 0
+
+
+def _sync_progress(sync_status_path: Path) -> tuple[dict[str, Any], int]:
+    status = _read_json(sync_status_path)
+    acknowledged = 0
+    for key in ("last_synced_line", "last_attempted_line"):
+        value = status.get(key, 0)
+        try:
+            acknowledged = max(acknowledged, int(value or 0))
+        except (TypeError, ValueError):
+            continue
+    return status, acknowledged
+
+
+def _count_pending_sync_backlog(
+    pending_sync_path: Path,
+    sync_status_path: Path,
+) -> tuple[int, int, dict[str, Any]]:
+    total_count = _count_jsonl_entries(pending_sync_path)
+    status, acknowledged = _sync_progress(sync_status_path)
+    backlog = max(total_count - acknowledged, 0)
+    return backlog, total_count, status
 
 
 def _recovery_state_path(workspace_path: str | Path) -> Path:
@@ -139,7 +162,7 @@ def _load_workspace_sentinel_state(workspace_root: Path) -> dict:
     should_keep_running = (
         not status.stop_requested and (has_running or status.stage not in {"", "init", "done"})
     )
-    ralph_prompt_path = str((workspace_root / ".claude" / "ralph-prompt.txt").resolve())
+    ralph_prompt_path = str((workspace_root / ".codex" / "loop-prompt.txt").resolve())
     recovery_state = _load_recovery_state(workspace_root)
     return {
         "workspace_path": str(workspace_root),
@@ -279,16 +302,21 @@ def _build_resume_recovery_payload(
         background_agent = {}
 
     pending_sync_path = workspace_root / "lark_sync" / "pending_sync.jsonl"
-    pending_sync_count = _count_jsonl_entries(pending_sync_path)
+    sync_status_path = workspace_root / "lark_sync" / "sync_status.json"
+    pending_sync_count, pending_sync_total_count, sync_status = _count_pending_sync_backlog(
+        pending_sync_path,
+        sync_status_path,
+    )
 
     pending_hooks: list[dict[str, Any]] = []
     if pending_sync_count > 0:
         pending_hooks.append({
             "name": "lark_sync",
             "pending_count": pending_sync_count,
+            "pending_total_count": pending_sync_total_count,
             "path": str(pending_sync_path),
             "resume_hint": (
-                "restart the sibyl-lark-sync background agent before continuing the loop"
+                "run `sibyl sync <workspace>` before continuing the loop"
             ),
         })
 
@@ -310,6 +338,8 @@ def _build_resume_recovery_payload(
         "resume_action": resume_action,
         "background_agent_required": bool(pending_background_agents),
         "pending_sync_count": pending_sync_count,
+        "pending_sync_total_count": pending_sync_total_count,
+        "lark_sync_status": sync_status,
         "pending_hooks": pending_hooks,
         "pending_background_agents": pending_background_agents,
         "breadcrumb": breadcrumb,
@@ -514,15 +544,151 @@ def cli_status(
     ws = Workspace.open_existing(workspace_root.parent, workspace_root.name)
     status = ws.get_project_metadata()
     status["topic"] = ws.read_file("topic.txt") or ""
+    pending_sync_path = ws.root / "lark_sync" / "pending_sync.jsonl"
     sync_status_path = ws.root / "lark_sync" / "sync_status.json"
+    pending_sync_count, pending_sync_total_count, sync_status = _count_pending_sync_backlog(
+        pending_sync_path,
+        sync_status_path,
+    )
+    status["pending_sync_count"] = pending_sync_count
+    status["pending_sync_total_count"] = pending_sync_total_count
     if sync_status_path.exists():
-        try:
-            status["lark_sync_status"] = json.loads(sync_status_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            status["lark_sync_status"] = {"error": "corrupted sync_status.json"}
+        status["lark_sync_status"] = sync_status or {"error": "corrupted sync_status.json"}
     status["recovery"] = _load_recovery_state(workspace_root)
     print(json.dumps(status, indent=2))
     return status
+
+
+def cli_sync(
+    workspace_path: str,
+) -> dict[str, Any]:
+    """CLI: Acknowledge pending Lark sync triggers in Codex-native mode.
+
+    The repo-local Python runner cannot perform MCP-backed Feishu/Lark uploads by
+    itself. Instead, it records that the backlog was seen and writes an explicit
+    deferred status so resume/recovery logic stops treating the same entries as a
+    never-started background worker.
+    """
+    workspace_root = resolve_workspace_root(workspace_path)
+    sync_dir = workspace_root / "lark_sync"
+    sync_dir.mkdir(parents=True, exist_ok=True)
+    pending_sync_path = sync_dir / "pending_sync.jsonl"
+    sync_status_path = sync_dir / "sync_status.json"
+    lock_path = sync_dir / "sync.lock"
+
+    pending_sync_count, pending_sync_total_count, current_status = _count_pending_sync_backlog(
+        pending_sync_path,
+        sync_status_path,
+    )
+    last_synced_line = int(current_status.get("last_synced_line", 0) or 0)
+
+    if pending_sync_count <= 0:
+        payload = {
+            "status": "ok",
+            "state": "noop",
+            "workspace_path": str(workspace_root),
+            "pending_sync_count": 0,
+            "pending_sync_total_count": pending_sync_total_count,
+            "last_synced_line": last_synced_line,
+            "last_attempted_line": int(current_status.get("last_attempted_line", 0) or 0),
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return payload
+
+    entries: list[dict[str, Any]] = []
+    try:
+        lines = pending_sync_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+
+    start_line = max(
+        int(current_status.get("last_synced_line", 0) or 0),
+        int(current_status.get("last_attempted_line", 0) or 0),
+    )
+    for line in lines[start_line:]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+
+    started_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    lock_path.write_text(
+        json.dumps(
+            {
+                "started_at": started_at,
+                "workspace_path": str(workspace_root),
+                "mode": "codex-local-deferred",
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        stages = [
+            str(entry.get("trigger_stage", "")).strip()
+            for entry in entries
+            if str(entry.get("trigger_stage", "")).strip()
+        ]
+        error_message = (
+            "Deferred pending Feishu/Lark sync requests in Codex-native local mode. "
+            "The repo-local `sibyl sync` runner acknowledges backlog bookkeeping, but "
+            "real cloud upload still requires an MCP-backed Codex agent path."
+        )
+        history = current_status.get("history", [])
+        if not isinstance(history, list):
+            history = []
+        history.append(
+            {
+                "at": started_at,
+                "success": False,
+                "state": "deferred",
+                "stages_seen": stages,
+                "pending_count": pending_sync_count,
+                "reason": error_message,
+            }
+        )
+        updated_status = {
+            **current_status,
+            "state": "deferred",
+            "last_attempted_at": started_at,
+            "last_attempted_line": pending_sync_total_count,
+            "last_sync_success": False,
+            "last_synced_line": last_synced_line,
+            "last_trigger_stage": stages[-1] if stages else "",
+            "last_error": error_message,
+            "history": history[-20:],
+        }
+        _write_json_atomic(sync_status_path, updated_status)
+    finally:
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+
+    payload = {
+        "status": "ok",
+        "state": "deferred",
+        "workspace_path": str(workspace_root),
+        "pending_sync_count": 0,
+        "pending_sync_total_count": pending_sync_total_count,
+        "last_synced_line": last_synced_line,
+        "last_attempted_line": pending_sync_total_count,
+        "stages_seen": stages,
+        "message": (
+            "Pending sync entries were acknowledged locally. "
+            "Cloud sync remains deferred until an MCP-backed worker is available."
+        ),
+    }
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return payload
 
 
 def cli_checkpoint(
@@ -598,7 +764,7 @@ def cli_sentinel_session(
         "session_id": session_id,
         "tmux_pane": tmux_pane,
         "saved_at": time.time(),
-        "ralph_prompt_path": str((workspace_root / ".claude" / "ralph-prompt.txt").resolve()),
+        "ralph_prompt_path": str((workspace_root / ".codex" / "loop-prompt.txt").resolve()),
     }
 
     with _sentinel_registry_lock():

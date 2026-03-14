@@ -441,15 +441,13 @@
                 </div>
               </div>
               <div class="badge-row">
-                <span :class="['runtime-pill', runtimeInfo.links?.agents ? 'ok' : 'warn']">agents link</span>
-                <span :class="['runtime-pill', runtimeInfo.links?.skills ? 'ok' : 'warn']">skills link</span>
-                <span :class="['runtime-pill', runtimeInfo.links?.settings ? 'ok' : 'warn']">settings link</span>
+                <span :class="['runtime-pill', runtimeInfo.links?.codex_runtime_dir ? 'ok' : 'warn']">.codex</span>
                 <span :class="['runtime-pill', runtimeInfo.links?.venv ? 'ok' : 'warn']">venv link</span>
                 <span :class="['runtime-pill', runtimeInfo.git_initialized ? 'ok' : 'warn']">git</span>
               </div>
               <div class="runtime-path"><strong>System root</strong> <code>{{ runtimeInfo.system_root || '-' }}</code></div>
               <div class="runtime-path"><strong>Project memory</strong> <code>{{ runtimeInfo.project_memory_path }}</code></div>
-              <div class="runtime-path"><strong>Effective CLAUDE</strong> <code>{{ runtimeInfo.claude_md_path }}</code></div>
+              <div class="runtime-path"><strong>Effective AGENTS</strong> <code>{{ runtimeInfo.agents_md_path }}</code></div>
               <div v-if="runtimeInfo.warnings && runtimeInfo.warnings.length" class="warning-list">
                 <span v-for="warning in runtimeInfo.warnings" :key="warning" class="warning-chip">{{ warning }}</span>
               </div>

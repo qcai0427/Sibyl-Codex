@@ -1,10 +1,10 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════
-# Sibyl Sentinel - Watchdog for Claude Code experiment resilience
+# Sibyl Sentinel - Watchdog for Codex CLI experiment resilience
 # ═══════════════════════════════════════════════════════════════
 #
 # Runs in a sibling tmux pane, monitors experiment state and
-# Claude Code process health. Automatically revives Claude when
+# Codex CLI process health. Automatically revives Codex when
 # it stops unexpectedly while experiments are still active.
 #
 # Usage:
@@ -12,7 +12,7 @@
 #
 # Arguments:
 #   workspace_path    e.g. workspaces/ttt-dlm (relative or absolute)
-#   tmux_pane         e.g. sibyl:0.0 (target pane where Claude runs)
+#   tmux_pane         e.g. sibyl:0.0 (target pane where Codex runs)
 #   poll_interval_sec default 120 (2 minutes)
 #
 # Stop: echo '{"stop":true}' > <workspace>/sentinel_stop.json
@@ -53,30 +53,30 @@ get_pane_shell_pid() {
     tmux display-message -t "$TMUX_PANE" -p '#{pane_pid}' 2>/dev/null || echo ""
 }
 
-# Check if Claude process is running in the target tmux pane
-claude_is_running() {
+# Check if Codex process is running in the target tmux pane
+codex_is_running() {
     local pane_pid
     pane_pid=$(get_pane_shell_pid)
     [[ -n "$pane_pid" ]] || return 1
-    pgrep -P "$pane_pid" -f "claude" >/dev/null 2>&1
+    pgrep -P "$pane_pid" -f "codex" >/dev/null 2>&1
 }
 
-# Check if Claude has active child processes (bash commands, sleep, ssh, etc.)
-# This prevents false "idle" detection when Claude is running a tool like
+# Check if Codex has active child processes (bash commands, sleep, ssh, etc.)
+# This prevents false "idle" detection when Codex is running a tool like
 # `bash sleep 600` during experiment_wait polling.
-claude_has_active_children() {
-    local pane_pid claude_pid
+codex_has_active_children() {
+    local pane_pid codex_pid
     pane_pid=$(get_pane_shell_pid)
     [[ -n "$pane_pid" ]] || return 1
 
-    # Find claude's PID (direct child of pane shell)
-    claude_pid=$(pgrep -P "$pane_pid" -f "claude" 2>/dev/null | head -1)
-    [[ -n "$claude_pid" ]] || return 1
+    # Find codex's PID (direct child of pane shell)
+    codex_pid=$(pgrep -P "$pane_pid" -f "codex" 2>/dev/null | head -1)
+    [[ -n "$codex_pid" ]] || return 1
 
-    # Check if claude has any child processes (tool execution in progress)
+    # Check if codex has any child processes (tool execution in progress)
     # Common children: bash, sleep, ssh, python3, node
     local children
-    children=$(pgrep -P "$claude_pid" 2>/dev/null | wc -l | tr -d ' ')
+    children=$(pgrep -P "$codex_pid" 2>/dev/null | wc -l | tr -d ' ')
     [[ "$children" -gt 0 ]]
 }
 
@@ -139,47 +139,46 @@ get_session_id() {
 
 # ─── Actions ──────────────────────────────────────────────────
 
-# Restart Claude Code in the target pane (Case A: process dead)
-restart_claude() {
+# Restart Codex CLI in the target pane (Case A: process dead)
+restart_codex() {
     local session_id
     session_id=$(get_session_id)
 
-    log "RESTART: Claude process not found, restarting..."
+    log "RESTART: Codex process not found, restarting..."
 
     if [[ -n "$session_id" ]]; then
         log "  Resuming session: ${session_id:0:12}..."
-        tmux send-keys -t "$TMUX_PANE" "cd $SIBYL_ROOT && claude --resume $session_id" Enter
+        tmux send-keys -t "$TMUX_PANE" "cd $WORKSPACE && codex resume $session_id" Enter
     else
-        log "  No session ID, using --continue"
-        tmux send-keys -t "$TMUX_PANE" "cd $SIBYL_ROOT && claude --continue" Enter
+        log "  No session ID, using codex resume --last fallback"
+        tmux send-keys -t "$TMUX_PANE" "cd $WORKSPACE && codex resume --last" Enter
     fi
 
-    # Wait for Claude to start (up to 90 seconds)
+    # Wait for Codex to start (up to 90 seconds)
     local waited=0
-    while ! claude_is_running && [[ $waited -lt 90 ]]; do
+    while ! codex_is_running && [[ $waited -lt 90 ]]; do
         sleep 5
         waited=$((waited + 5))
-        log "  Waiting for Claude to start... (${waited}s)"
+        log "  Waiting for Codex to start... (${waited}s)"
     done
 
-    if claude_is_running; then
-        log "  Claude started. Waiting 15s for initialization..."
+    if codex_is_running; then
+        log "  Codex started. Waiting 15s for initialization..."
         sleep 15
-        # Inject resume command
-        tmux send-keys -t "$TMUX_PANE" "/sibyl-research:continue $CONTINUE_TARGET" Enter
-        log "  Injected /sibyl-research:continue $PROJECT_NAME"
+        tmux send-keys -t "$TMUX_PANE" "sibyl continue $CONTINUE_TARGET" Enter
+        log "  Injected sibyl continue $PROJECT_NAME"
         wake_attempts=0
     else
-        log "  ERROR: Claude failed to start after 90s"
+        log "  ERROR: Codex failed to start after 90s"
         wake_attempts=$((wake_attempts + 1))
     fi
 }
 
-# Wake up an idle Claude session (Case B: process alive but stale heartbeat)
-wake_claude() {
-    log "WAKE: Heartbeat stale, nudging Claude..."
-    tmux send-keys -t "$TMUX_PANE" "/sibyl-research:continue $CONTINUE_TARGET" Enter
-    log "  Injected /sibyl-research:continue $PROJECT_NAME"
+# Wake up an idle Codex session (Case B: process alive but stale heartbeat)
+wake_codex() {
+    log "WAKE: Heartbeat stale, nudging Codex..."
+    tmux send-keys -t "$TMUX_PANE" "sibyl continue $CONTINUE_TARGET" Enter
+    log "  Injected sibyl continue $PROJECT_NAME"
     wake_attempts=$((wake_attempts + 1))
 }
 
@@ -233,22 +232,22 @@ while true; do
         continue
     fi
 
-    # ── Case A: Claude process is dead ──
-    if ! claude_is_running; then
-        log "Claude NOT running! Confirming in 5s..."
+    # ── Case A: Codex process is dead ──
+    if ! codex_is_running; then
+        log "Codex NOT running! Confirming in 5s..."
         sleep 5
-        if ! claude_is_running; then
-            restart_claude
+        if ! codex_is_running; then
+            restart_codex
             sleep "$POLL_INTERVAL"
             continue
         fi
     fi
 
-    # ── Claude is running ──
+    # ── Codex is running ──
 
     # Check for active children (bash/sleep/ssh tool execution)
-    if claude_has_active_children; then
-        log "ok - Claude running, tool executing (has children)"
+    if codex_has_active_children; then
+        log "ok - Codex running, tool executing (has children)"
         wake_attempts=0
         sleep "$POLL_INTERVAL"
         continue
@@ -256,10 +255,10 @@ while true; do
 
     # No active children - check heartbeat freshness
     if heartbeat_stale; then
-        log "Claude running but heartbeat stale, no active tools"
-        wake_claude
+        log "Codex running but heartbeat stale, no active tools"
+        wake_codex
     else
-        log "ok - Claude running, heartbeat fresh"
+        log "ok - Codex running, heartbeat fresh"
         wake_attempts=0
     fi
 

@@ -281,6 +281,18 @@ def ensure_workspace_git_repo(
         warnings.append(f"Failed to initialize git repo: {init_result.stderr.strip()}")
         return
     changes.append("Initialized workspace git repository")
+    subprocess.run(
+        ["git", "config", "user.name", "Sibyl Test"],
+        cwd=ws.root,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "sibyl@example.com"],
+        cwd=ws.root,
+        capture_output=True,
+        text=True,
+    )
 
     subprocess.run(["git", "add", "."], cwd=ws.root, capture_output=True, text=True)
     commit_result = subprocess.run(
@@ -407,10 +419,8 @@ def migrate_workspace(
             ".sibyl/system.json",
             ".sibyl/project/MEMORY.md",
             ".sibyl/project/prompt_overlays",
-            "CLAUDE.md",
-            ".claude/agents",
-            ".claude/skills",
-            ".claude/settings.local.json",
+            "AGENTS.md",
+            ".codex",
             ".venv",
         )
     )

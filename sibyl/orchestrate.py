@@ -1,9 +1,9 @@
-"""Sibyl orchestrator for Claude Code native mode.
+"""Sibyl orchestrator for the Codex CLI-native control plane.
 
 This module provides a state-machine orchestrator that returns the next action
-for the main Claude Code session to execute. It does NOT call claude-agent-sdk.
+for the main Codex session to execute.
 
-Usage (called by Skill via Bash):
+Usage:
     python -c "from sibyl.orchestrate import FarsOrchestrator; ..."
 """
 import json
@@ -121,7 +121,7 @@ def get_next_batch(
 class FarsOrchestrator:
     """State-machine orchestrator for Sibyl research pipeline.
 
-    Called by the Sibyl Skill, returns the next action for Claude Code to execute.
+    Returns the next action for the Codex-native Sibyl control plane to execute.
     """
 
     # Pipeline stages in order
@@ -442,6 +442,7 @@ class FarsOrchestrator:
 
 
 FarsOrchestrator._get_or_create_checkpoint = _checkpointing.get_or_create_checkpoint
+FarsOrchestrator._reconcile_stage_checkpoint = _checkpointing.reconcile_stage_checkpoint
 FarsOrchestrator._is_pipeline_done = _state_machine.is_pipeline_done
 FarsOrchestrator._parse_quality_gate_params = _state_machine.parse_quality_gate_params
 FarsOrchestrator._get_next_stage = _state_machine.get_next_stage
@@ -493,6 +494,7 @@ cli_checkpoint = _bind_cli(
     _cli_core.cli_checkpoint,
     checkpoint_dirs=CHECKPOINT_DIRS,
 )
+cli_sync = _cli_core.cli_sync
 cli_experiment_status = _runtime_cli.cli_experiment_status
 cli_experiment_supervisor_claim = _runtime_cli.cli_experiment_supervisor_claim
 cli_experiment_supervisor_heartbeat = _runtime_cli.cli_experiment_supervisor_heartbeat

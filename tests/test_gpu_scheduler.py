@@ -306,6 +306,27 @@ class TestGetNextBatch:
         result = get_next_batch(tmp_path, [0, 1])
         assert result is None
 
+    def test_pilot_mode_excludes_full_stage_tasks(self, tmp_path):
+        plan_dir = tmp_path / "plan"
+        plan_dir.mkdir()
+        tasks = [
+            {
+                "id": "pilot_a",
+                "depends_on": [],
+                "expected_output": "exp/results/pilots/a.md",
+            },
+            {
+                "id": "full_b",
+                "depends_on": [],
+                "expected_output": "exp/results/full/b.md",
+            },
+        ]
+        (plan_dir / "task_plan.json").write_text(json.dumps({"tasks": tasks}))
+
+        result = get_next_batch(tmp_path, [0], mode="PILOT")
+        assert result is not None
+        assert result[0]["task_ids"] == ["pilot_a"]
+
 
 # ══════════════════════════════════════════════
 # Batch info (with timing metadata)
@@ -377,6 +398,31 @@ class TestGetBatchInfo:
         assert info is not None
         assert info["batch"] == []
         assert info["remaining_count"] == 2
+
+    def test_pilot_batch_info_filters_full_stage_tasks(self, tmp_path):
+        plan_dir = tmp_path / "plan"
+        plan_dir.mkdir()
+        tasks = [
+            {
+                "id": "pilot_a",
+                "depends_on": [],
+                "estimated_minutes": 10,
+                "expected_output": "exp/results/pilots/a.md",
+            },
+            {
+                "id": "ablation_b",
+                "depends_on": [],
+                "estimated_minutes": 20,
+                "expected_output": "exp/results/full/b.md",
+            },
+        ]
+        (plan_dir / "task_plan.json").write_text(json.dumps({"tasks": tasks}))
+
+        info = get_batch_info(tmp_path, [0], mode="PILOT")
+        assert info is not None
+        assert info["total_count"] == 1
+        assert info["remaining_count"] == 1
+        assert info["batch"][0]["task_ids"] == ["pilot_a"]
 
 
 # ══════════════════════════════════════════════

@@ -55,9 +55,10 @@ def _build_post_init_guide(
         "  ├── spec.md            ← 研究规格书（主题、背景、约束）",
         "  ├── topic.txt          ← 研究主题（一行文本）",
         "  ├── status.json        ← 流水线状态（自动维护）",
+        "  ├── AGENTS.md          ← workspace 级 Codex 指令（自动生成）",
         "  ├── .sibyl/project/",
         "  │   └── MEMORY.md      ← 项目记忆（长期约束、偏好）",
-        "  └── .claude/           ← 系统资源 symlink（自动创建）",
+        "  └── .codex/            ← Codex loop prompt / runtime metadata",
         "",
         "── 下一步 ────────────────────────────────────────────────────",
         "",
@@ -111,15 +112,20 @@ def _build_post_init_guide(
     step += 1
 
     lines.append(f"  {step}. 启动研究循环:")
-    lines.append("     建议先在新的 tmux pane / window 中，从该项目 workspace 根目录启动 Claude:")
+    lines.append("     建议先在新的 tmux pane / window 中，从该项目 workspace 根目录启动 Codex CLI:")
     lines.append(f"       export SIBYL_ROOT={shlex.quote(expected_sibyl_root)}")
     lines.append(f"       cd {shlex.quote(str(ws))}")
-    lines.append("       claude --plugin-dir \"$SIBYL_ROOT/plugin\" --dangerously-skip-permissions")
+    lines.append("       codex")
     lines.append("")
-    lines.append("     然后在该 Claude 会话中执行:")
-    lines.append("       /sibyl-research:start spec.md")
+    lines.append("     然后在该 Codex 会话中执行:")
+    lines.append("       1. 读取 AGENTS.md 和 .codex/loop-prompt.txt")
+    lines.append("       2. 按照其中的 Sibyl control-plane 协议继续运行")
     lines.append("")
-    lines.append("     如果要并行跑多个项目：每个项目各开一个 tmux pane/session，且都从各自的 workspace 根目录启动。")
+    lines.append("     如果想直接从 shell 触发初始化/恢复入口，也可使用:")
+    lines.append("       sibyl start spec.md")
+    lines.append("       sibyl continue .")
+    lines.append("")
+    lines.append("     如果要并行跑多个项目：每个项目各开一个 tmux pane/session，且都从各自的 workspace 根目录启动 Codex。")
     lines.append("")
 
     lines.append("─────────────────────────────────────────────────────────────")
@@ -194,7 +200,7 @@ def cli_init_spec(
     project_name: str,
     *,
     config_path: str | None = None,
-) -> None:
+) -> dict[str, Any]:
     """Initialize a project directory for spec editing."""
     config = load_effective_config(config_path=config_path)
     ws = Workspace(
@@ -215,6 +221,7 @@ def cli_init_spec(
         "guide": guide,
     }
     print(json.dumps(result, indent=2))
+    return result
 
 
 def _extract_topic(spec_content: str, default_topic: str) -> str:
@@ -235,12 +242,13 @@ def cli_init_from_spec(
     spec_path: str,
     *,
     config_path: str | None = None,
-) -> None:
+) -> dict[str, Any]:
     """Initialize or refresh a project from a spec markdown file."""
     spec_file = Path(spec_path)
     if not spec_file.exists():
-        print(json.dumps({"error": f"Spec file not found: {spec_path}"}))
-        return
+        result = {"error": f"Spec file not found: {spec_path}"}
+        print(json.dumps(result))
+        return result
 
     spec_content = spec_file.read_text(encoding="utf-8")
     existing_workspace_root = resolve_workspace_root(spec_file.parent)
@@ -315,3 +323,4 @@ def cli_init_from_spec(
         "guide": guide,
     }
     print(json.dumps(result, indent=2))
+    return result

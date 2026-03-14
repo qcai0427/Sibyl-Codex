@@ -128,7 +128,7 @@ class TestProjectsEndpoint:
         data = r.get_json()
         assert data[0]["name"] == "bare-proj"
         assert not (proj / ".sibyl" / "system.json").exists()
-        assert not (proj / "CLAUDE.md").exists()
+        assert not (proj / "AGENTS.md").exists()
 
 
 class TestDashboardEndpoint:
@@ -189,7 +189,7 @@ class TestDashboardEndpoint:
         assert data["status"]["name"] == "bare-proj"
         assert data["runtime"]["runtime_ready"] is False
         assert not (proj / ".sibyl" / "system.json").exists()
-        assert not (proj / "CLAUDE.md").exists()
+        assert not (proj / "AGENTS.md").exists()
 
 
 class TestFilesEndpoint:
@@ -200,6 +200,7 @@ class TestFilesEndpoint:
         dir_names = {d["name"] for d in data["dirs"]}
         assert ".sibyl" in dir_names
         assert ".claude" not in dir_names
+        assert ".codex" not in dir_names
         assert "context" in dir_names
         assert "writing" in dir_names
 
@@ -399,7 +400,7 @@ class TestSystemEndpoint:
         assert data["runtime_ready_count"] == 1
         assert data["migration_needed_count"] == 0
         assert data["skill_count"] > 0
-        assert data["agent_count"] > 0
+        assert data["agent_count"] == 0
         assert data["tool_count"] == len(data["tool_names"])
         assert data["tools_dir"].endswith("/tools")
         assert data["workspaces_dir"].endswith("/workspaces")
