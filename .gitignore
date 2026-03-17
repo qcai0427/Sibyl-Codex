@@ -46,3 +46,7 @@ cli_pause
 进入
 连续失败
 重试一次
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore

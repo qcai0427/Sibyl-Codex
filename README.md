@@ -10,6 +10,7 @@
 
 [中文文档](README_CN.md)
 
+I am not the oringinal contributor of this repo. What you see right now is the codex Cli version of Sibyl project, which been used by me personally.
 Sibyl is a **fully automated scientific discovery system** that autonomously drives ML research from literature survey to paper submission. It operates as an **autonomous research organization**: 20+ specialized AI agents debate ideas, design and run GPU experiments, write papers, and critically review their own work — all without human intervention.
 
 What truly sets Sibyl apart is its **dual-loop architecture**:
